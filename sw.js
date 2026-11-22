@@ -1,6 +1,6 @@
 /* オフラインでも開けるようにするための Service Worker */
 const CACHE = 'sensei-note-v1.0.1';
-const SHELL = ['./', './index.html', './style.css', './app.js', './manifest.webmanifest', './icon.svg', './icon-180.png', './icon-512.png', './lib/pdf.min.js', './pdf.worker.min.js'];
+const SHELL = ['./', './index.html', './style.css', './app.js', './manifest.webmanifest', './icon.svg', './icon-180.png', './icon-512.png', './pdf.min.js', './pdf.worker.min.js'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

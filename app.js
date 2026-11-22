@@ -7,7 +7,7 @@ const KINDS = ['行事', '授業', '締切'];
 const CAT_CLASS = { '国語': 'c-kokugo', '道徳': 'c-doutoku', '学級・学年': 'c-gakkyu', '校務': 'c-koumu' };
 const KIND_CLASS = { '締切': 'k-shime' };
 const WD = ['日', '月', '火', '水', '木', '金', '土'];
-const PDFJS_BASE = 'lib/'; // PDF表示ライブラリ（pdf.js、無料・同梱）
+const PDFJS_BASE = ''; // PDF表示ライブラリ（pdf.js、無料・同梱）
 
 /* ---------- 小道具 ---------- */
 const $ = (s, el = document) => el.querySelector(s);

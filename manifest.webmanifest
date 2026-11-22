@@ -1,0 +1,16 @@
+{
+  "name": "先生の予定ノート",
+  "short_name": "予定ノート",
+  "description": "行事・授業・校務の予定と準備を管理する個人用ノート",
+  "lang": "ja",
+  "start_url": "./#/week",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f5f4ef",
+  "theme_color": "#1f6f5c",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" },
+    { "src": "icon-180.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

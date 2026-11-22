@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>先生の予定ノート</title>
+<meta name="description" content="中学校の先生のための、行事・授業・校務の予定と準備を管理する個人用ノート">
+<meta name="theme-color" content="#1f6f5c">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="予定ノート">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="apphead">
+  <div class="apphead-in">
+    <span class="appname">先生の予定ノート</span>
+    <button class="savechip" data-go="#/settings" title="保存先と同期の確認">この端末に保存・同期なし</button>
+  </div>
+</header>
+
+<main id="view" class="wrap" aria-live="polite"></main>
+
+<button class="fab" data-act="quick-add" aria-label="予定を追加">＋ 追加</button>
+
+<nav class="tabbar" aria-label="画面の切り替え">
+  <a href="#/week" data-tab="week"><span class="ti">▦</span><span>週</span></a>
+  <a href="#/month" data-tab="month"><span class="ti">▤</span><span>月</span></a>
+  <a href="#/undated" data-tab="undated"><span class="ti">？</span><span>日付未定<b class="tabbadge" id="undated-badge" hidden></b></span></a>
+  <a href="#/copy" data-tab="copy"><span class="ti">⧉</span><span>前年度から</span></a>
+  <a href="#/settings" data-tab="settings"><span class="ti">⚙</span><span>設定</span></a>
+</nav>
+
+<div id="sheet-backdrop" class="sheet-backdrop" hidden></div>
+<div id="sheet" class="sheet" role="dialog" aria-modal="true" hidden></div>
+<div id="viewer" class="viewer" role="dialog" aria-modal="true" hidden></div>
+<div id="toast" class="toast" role="status" hidden></div>
+
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,7 +1,7 @@
 /* 先生の予定ノート — 端末内保存（IndexedDB）の個人用予定・準備管理アプリ */
 'use strict';
 
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.0.2';
 const CATS = ['国語', '道徳', '学級・学年', '校務'];
 const KINDS = ['行事', '授業', '締切'];
 const CAT_CLASS = { '国語': 'c-kokugo', '道徳': 'c-doutoku', '学級・学年': 'c-gakkyu', '校務': 'c-koumu' };
@@ -70,8 +70,14 @@ async function loadAll() {
     S[k] = new Map(rows.map((r) => [r.id, r]));
   }
 }
+let persistAsked = false;
+function askPersist() {
+  if (persistAsked) return;
+  persistAsked = true;
+  try { navigator.storage?.persist?.().catch(() => {}); } catch { /* 非対応 */ }
+}
 async function save(store, obj) {
-  if (store !== 'meta') obj.updatedAt = Date.now();
+  if (store !== 'meta') { obj.updatedAt = Date.now(); askPersist(); }
   S[store].set(obj.id, obj);
   try { await DB.put(store, obj); } catch (e) { console.error(e); toast('保存に失敗しました（容量不足の可能性）'); throw e; }
 }
@@ -162,7 +168,17 @@ function viewWeek(q) {
     h += `<section class="card welcome"><h2>ようこそ</h2>
       <p>右下の「＋ 追加」から、タイトルだけですぐに予定を登録できます。日付や準備はあとから入力できます。</p>
       <p>まず動きを確かめたいときは、確認用サンプル（11月26日 人権・同和教育参観日 など）を読み込んでください。</p>
-      <button class="btn primary" data-act="load-sample">確認用サンプルを読み込む</button></section>`;
+      <button class="btn primary" data-act="load-sample">確認用サンプルを読み込む</button>
+      <details style="margin-top:12px"><summary><b>前に入力したデータが見えないときは</b></summary>
+        <p>データは「開いた端末・ブラウザ・開き方」ごとに別々に保存されています。次を確かめてください。</p>
+        <ul>
+          <li><b>iPhone・iPad</b>：Safariで開いたときと、ホーム画面のアイコンから開いたときは、データが別です。前回と同じ方法で開いてみてください。</li>
+          <li>前回と<b>別のブラウザ</b>（Safari／Chrome、LINEの中のブラウザなど）や<b>別の端末</b>で開いていませんか。</li>
+          <li><b>プライベートブラウズ（シークレットモード）</b>では、閉じるとデータが消えます。</li>
+          <li>アドレスが前回と同じか確かめてください（今のアドレス：${esc(location.origin + location.pathname)}）。</li>
+        </ul>
+        <p>前のデータが見つかったら、そちらで「設定 → バックアップを保存」し、いつも使う方で「復元」すると、ひとつにまとめられます。</p>
+      </details></section>`;
   }
 
   h += `<div class="summary">
@@ -542,13 +558,15 @@ async function fillStorageInfo() {
   const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   el.innerHTML = `<dl class="info">
       <dt>保存先</dt><dd><b>この端末のこのブラウザの中</b>（IndexedDB）。インターネット上のサーバーには送信していません。</dd>
+      <dt>このデータの場所</dt><dd>${esc(location.origin + location.pathname)} を<b>${standalone ? 'ホーム画面のアイコンから' : 'ブラウザで'}</b>開いたときのデータです。別のアドレス・別のブラウザ・別の開き方では、別のデータになります。</dd>
       <dt>端末間の同期</dt><dd><span class="ng">同期なし</span>　スマホ・iPad・パソコンのデータはそれぞれ別です。別の端末へ移すときは「バックアップを保存」→ 移す先で「バックアップから復元」をしてください。</dd>
       <dt>消えにくくする設定</dt><dd>${persisted === true ? '<span class="ok">許可済み</span>（ブラウザが自動で消さない設定）' : persisted === false ? '<span class="ng">未許可</span> <button class="btn small" data-act="persist">許可を求める</button>' : 'このブラウザでは確認できません'}</dd>
       <dt>使用量</dt><dd>${est ? `${mb(est.usage || 0)}（上限の目安 ${mb(est.quota || 0)}）` : '確認できません'}</dd>
       <dt>登録件数</dt><dd>予定 ${S.events.size}・準備 ${S.preps.size}・資料 ${S.attachments.size}・資料メモ ${S.notes.size}</dd>
       <dt>アプリとして起動</dt><dd>${standalone ? '<span class="ok">ホーム画面から起動中</span>' : 'ブラウザで表示中'}</dd>
     </dl>
-    ${ios && !standalone ? '<div class="note-box">iPhone・iPadでは、Safariの共有ボタン →「ホーム画面に追加」から使うと、データが消えにくくなります（Safariで7日以上開かないと、サイトのデータが消されることがあります）。</div>' : ''}
+    ${ios ? `<div class="note-box"><b>iPhone・iPadの注意：</b>Safariで開いたときと、ホーム画面のアイコンから開いたときでは、データが別々に保存されます。<b>いつも同じ方法（おすすめはホーム画面のアイコン）</b>で開いてください。${standalone ? '' : '<br>Safariで7日以上開かないと、サイトのデータが消されることがあります。'}</div>` : ''}
+    <div class="note-box">プライベートブラウズ（シークレットモード）で開くと、閉じたときにデータが消えます。</div>
     <div class="note-box">ブラウザの「履歴とWebサイトデータを消去」を行うと、このアプリのデータも消えます。定期的にバックアップを保存してください。</div>`;
 }
 
@@ -647,11 +665,20 @@ async function quickSave(detail) {
 const fieldTimers = new Map();
 function scheduleFieldSave(el) {
   const k = el.dataset.field;
-  clearTimeout(fieldTimers.get(k));
-  fieldTimers.set(k, setTimeout(() => { fieldTimers.delete(k); onFieldChange(el, true); }, 500));
+  const evId = currentEventId;
+  const t = fieldTimers.get(k); if (t) clearTimeout(t.timer);
+  fieldTimers.set(k, { el, evId, timer: setTimeout(() => { fieldTimers.delete(k); onFieldChange(el, true, evId); }, 500) });
 }
-async function onFieldChange(el, quiet) {
-  const ev = S.events.get(currentEventId);
+// 予約中の保存と、入力途中の「準備」をすぐに保存する
+async function flushPending() {
+  const jobs = [...fieldTimers.values()];
+  fieldTimers.clear();
+  for (const j of jobs) { clearTimeout(j.timer); await onFieldChange(j.el, true, j.evId); }
+  const np = $('#np-title');
+  if (np && np.value.trim() && currentEventId) await addPrep(true);
+}
+async function onFieldChange(el, quiet, evId) {
+  const ev = S.events.get(evId || currentEventId);
   if (!ev) return;
   const f = el.dataset.field;
   let v = el.value;
@@ -717,16 +744,19 @@ function refreshAttSection() {
   if (ev && sec) { sec.innerHTML = attSection(ev); loadThumbs(); }
 }
 
-async function addPrep() {
+async function addPrep(silent) {
   const ev = S.events.get(currentEventId);
+  if (!ev || !$('#np-title')) return;
   const title = $('#np-title').value.trim();
-  if (!title) { toast('作業名を入力してください'); $('#np-title').focus(); return; }
+  if (!title) { if (!silent) { toast('作業名を入力してください'); $('#np-title').focus(); } return; }
   let due = $('#np-due').value || null;
   const offRaw = $('#np-off').value;
   let offset = offRaw !== '' ? Number(offRaw) : null;
   if (!due && offset != null && ev.date) due = addDays(ev.date, -offset);
   if (due && ev.date) offset = diffDays(ev.date, due);
+  $('#np-title').value = '';
   await save('preps', newPrep({ eventId: ev.id, title, due, offset: due || offset != null ? offset : null }));
+  if (silent) { toast(`入力途中の準備「${title}」も保存しました`); return; }
   refreshPrepSection();
   toast(due ? `準備を追加しました（期限 ${fmtMD(due)}）` : '準備を追加しました（期限未定）');
   $('#np-title').focus();
@@ -1016,7 +1046,7 @@ const ACT = {
   'quick-add': (el) => openQuickAdd(el.dataset.date || (location.hash.startsWith('#/month') ? new URLSearchParams(location.hash.split('?')[1] || '').get('d') : '')),
   'qa-cat': (el) => { qaCat = qaCat === el.dataset.val ? '' : el.dataset.val; $$('#qa-cats button').forEach((b) => b.classList.toggle('on', b.dataset.val === qaCat)); },
   'qa-save': (el) => quickSave(!!el.dataset.detail),
-  'close-sheet': () => closeSheet(true),
+  'close-sheet': () => { if (confirmDiscard()) closeSheet(true); },
   back: () => { location.hash = lastListHash || '#/week'; },
   'set-seg': async (el) => {
     const ev = S.events.get(currentEventId); const f = el.dataset.field;
@@ -1026,7 +1056,7 @@ const ACT = {
   },
   'clear-date': () => changeEventDate(S.events.get(currentEventId), null),
   'shift-apply': (el) => applyShift(el.dataset.mode),
-  'add-prep': addPrep,
+  'add-prep': () => addPrep(false),
   'del-prep': async (el) => {
     const p = S.preps.get(el.dataset.id);
     if (!confirm(`準備「${p.title}」を削除しますか？`)) return;
@@ -1133,7 +1163,7 @@ document.addEventListener('click', (e) => {
 document.addEventListener('change', (e) => {
   const el = e.target;
   if (el.dataset.act && ACT_CHANGE[el.dataset.act]) { Promise.resolve(ACT_CHANGE[el.dataset.act](el)).catch((err) => { console.error(err); toast('エラーが起きました'); }); return; }
-  if (el.dataset.field) { clearTimeout(fieldTimers.get(el.dataset.field)); onFieldChange(el); return; }
+  if (el.dataset.field) { const t = fieldTimers.get(el.dataset.field); if (t) clearTimeout(t.timer); fieldTimers.delete(el.dataset.field); onFieldChange(el); return; }
   if (el.dataset.prepField) {
     const p = S.preps.get(el.dataset.id); const ev = S.events.get(p.eventId);
     if (el.dataset.prepField === 'title') {
@@ -1192,18 +1222,26 @@ document.addEventListener('input', (e) => {
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.isComposing) {
     if (e.target.id === 'qa-title') { e.preventDefault(); quickSave(false); }
-    if (e.target.id === 'np-title' || e.target.id === 'np-off') { e.preventDefault(); addPrep(); }
+    if (e.target.id === 'np-title' || e.target.id === 'np-off') { e.preventDefault(); addPrep(false); }
   }
   if (e.key === 'Escape') { if (!$('#sheet').hidden) closeSheet(true); else if (V) closeViewer(); }
 });
-$('#sheet-backdrop').addEventListener('click', () => closeSheet(true));
-window.addEventListener('hashchange', () => { if (V) closeViewer(); render(); });
+function confirmDiscard() {
+  const t = $('#qa-title') || $('#lk-url');
+  return !(t && t.value.trim()) || confirm('入力中の内容はまだ登録されていません。閉じてもよいですか？\n（登録するときは「登録する」を押してください）');
+}
+$('#sheet-backdrop').addEventListener('click', () => { if (confirmDiscard()) closeSheet(true); });
+window.addEventListener('hashchange', async () => {
+  // 画面を描き替える前に、前の画面で入力途中だったものを保存（currentEventId は前の画面のまま）
+  if (currentEventId) await flushPending();
+  if (V) closeViewer();
+  render();
+});
 // 画面を離れる前に、入力途中の文字を保存
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'hidden') {
-    for (const el of $$('[data-field]')) if (fieldTimers.has(el.dataset.field)) { clearTimeout(fieldTimers.get(el.dataset.field)); fieldTimers.delete(el.dataset.field); onFieldChange(el, true); }
-  }
+  if (document.visibilityState === 'hidden') flushPending();
 });
+window.addEventListener('pagehide', () => { flushPending(); });
 let lastDay = today();
 setInterval(() => { if (today() !== lastDay) { lastDay = today(); if (!currentEventId && !V && $('#sheet').hidden) rerender(); } }, 60000);
 

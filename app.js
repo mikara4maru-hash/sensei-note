@@ -1,13 +1,16 @@
 /* 先生の予定ノート — 端末内保存（IndexedDB）の個人用予定・準備管理アプリ */
 'use strict';
 
-const APP_VERSION = '1.0.2';
+const APP_VERSION = '1.1.0';
 const CATS = ['国語', '道徳', '学級・学年', '校務'];
 const KINDS = ['行事', '授業', '締切'];
 const CAT_CLASS = { '国語': 'c-kokugo', '道徳': 'c-doutoku', '学級・学年': 'c-gakkyu', '校務': 'c-koumu' };
 const KIND_CLASS = { '締切': 'k-shime' };
 const WD = ['日', '月', '火', '水', '木', '金', '土'];
 const PDFJS_BASE = ''; // PDF表示ライブラリ（pdf.js、無料・同梱）
+const WHERE = { school: '学校', home: '家' };
+const WHERE_ICON = { school: '🏫', home: '🏠' };
+const otherWhere = (w) => (w === 'school' ? 'home' : 'school');
 
 /* ---------- 小道具 ---------- */
 const $ = (s, el = document) => el.querySelector(s);
@@ -32,12 +35,12 @@ const isValidDate = (y, m, d) => { const t = new Date(y, m - 1, d); return t.get
 const offsetLabel = (o) => (o == null ? '' : o > 0 ? `行事の${o}日前` : o === 0 ? '行事の当日' : `行事の${-o}日後`);
 
 /* ---------- データベース ---------- */
-const STORES = ['events', 'preps', 'attachments', 'notes', 'blobs', 'meta'];
+const STORES = ['events', 'preps', 'attachments', 'notes', 'blobs', 'meta', 'todos'];
 const DB = {
   db: null,
   open() {
     return new Promise((res, rej) => {
-      const r = indexedDB.open('sensei-note', 1);
+      const r = indexedDB.open('sensei-note', 2);
       r.onupgradeneeded = () => { for (const s of STORES) if (!r.result.objectStoreNames.contains(s)) r.result.createObjectStore(s, { keyPath: 'id' }); };
       r.onsuccess = () => { this.db = r.result; res(); };
       r.onerror = () => rej(r.error);
@@ -63,9 +66,9 @@ const DB = {
 };
 
 // 画面表示用に、資料本体（blobs）以外はメモリにも持つ
-const S = { events: new Map(), preps: new Map(), attachments: new Map(), notes: new Map(), meta: new Map() };
+const S = { events: new Map(), preps: new Map(), attachments: new Map(), notes: new Map(), meta: new Map(), todos: new Map() };
 async function loadAll() {
-  for (const k of ['events', 'preps', 'attachments', 'notes', 'meta']) {
+  for (const k of ['events', 'preps', 'attachments', 'notes', 'meta', 'todos']) {
     const rows = await DB.all(k);
     S[k] = new Map(rows.map((r) => [r.id, r]));
   }
@@ -96,6 +99,16 @@ const attsOf = (id) => [...S.attachments.values()].filter((a) => a.eventId === i
 const notesOf = (attId) => [...S.notes.values()].filter((n) => n.attachmentId === attId).sort((a, b) => (a.page || 0) - (b.page || 0) || a.createdAt - b.createdAt);
 const overduePreps = () => { const t = today(); return prepList().filter((p) => !p.done && p.due && p.due < t).sort((a, b) => a.due.localeCompare(b.due)); };
 const isOverdue = (p) => !p.done && p.due && p.due < today();
+
+/* やることメモ：学校でやる／家でやる */
+const todoList = () => [...S.todos.values()];
+const byTodo = (a, b) => a.done - b.done || a.createdAt - b.createdAt;
+const todosOn = (d, w) => todoList().filter((t) => t.date === d && (!w || t.where === w)).sort(byTodo);
+const leftoverTodos = () => { const t = today(); return todoList().filter((x) => !x.done && x.date && x.date < t).sort((a, b) => a.date.localeCompare(b.date) || a.createdAt - b.createdAt); };
+const somedayTodos = () => todoList().filter((x) => !x.done && !x.date).sort((a, b) => a.createdAt - b.createdAt);
+function newTodo(f = {}) {
+  return { id: uid(), title: '', where: 'school', date: null, done: false, doneAt: null, memo: '', carry: 0, moves: 0, createdAt: Date.now(), ...f };
+}
 
 function newEvent(f = {}) {
   return { id: uid(), title: '', date: null, startTime: '', endTime: '', place: '', category: '', kind: '行事', memo: '', handover: '', sourceId: null, createdAt: Date.now(), ...f };
@@ -154,6 +167,8 @@ function viewWeek(q) {
   const weekPreps = prepList().filter((p) => p.due && p.due >= ws && p.due <= we);
   const weekEvents = evList().filter((e) => e.date && e.date >= ws && e.date <= we);
   const od = overduePreps();
+  const weekTodos = todoList().filter((x) => x.date && x.date >= ws && x.date <= we);
+  const lo = leftoverTodos();
   const [y1, m1, d1] = ws.split('-').map(Number);
   const [, m2, d2] = we.split('-').map(Number);
 
@@ -164,7 +179,7 @@ function viewWeek(q) {
     <button class="navbtn" data-go="#/week?d=${addDays(ws, 7)}" aria-label="次の週">▶</button>
   </div>`;
 
-  if (S.events.size === 0) {
+  if (S.events.size === 0 && S.todos.size === 0) {
     h += `<section class="card welcome"><h2>ようこそ</h2>
       <p>右下の「＋ 追加」から、タイトルだけですぐに予定を登録できます。日付や準備はあとから入力できます。</p>
       <p>まず動きを確かめたいときは、確認用サンプル（11月26日 人権・同和教育参観日 など）を読み込んでください。</p>
@@ -184,7 +199,9 @@ function viewWeek(q) {
   h += `<div class="summary">
     <div>この週の予定 <b>${weekEvents.length}</b> 件</div>
     <div>この週が期限の準備 <b>${weekPreps.length}</b> 件（未完了 ${weekPreps.filter((p) => !p.done).length}）</div>
+    <div>この週のやること <b>${weekTodos.length}</b> 件（未完了 ${weekTodos.filter((x) => !x.done).length}）</div>
     ${od.length ? `<div class="warnnum">期限を過ぎた準備 <b>${od.length}</b> 件</div>` : ''}
+    ${lo.length ? `<div class="warnnum"><a href="#/todo">やり残しのやること <b>${lo.length}</b> 件</a></div>` : ''}
   </div>`;
 
   if (od.length) {
@@ -197,13 +214,15 @@ function viewWeek(q) {
   for (const d of days) {
     const evs = eventsOn(d);
     const ps = prepsDueOn(d);
+    const tds = todosOn(d);
     const w = dow(d);
     h += `<section class="day ${d === t ? 'today' : ''} ${w === 6 ? 'sat' : w === 0 ? 'sun' : ''}">
       <header class="day-h"><span class="dname">${fmtMD(d)}</span>${d === t ? '<span class="tag">今日</span>' : ''}
         <button class="addday" data-act="quick-add" data-date="${d}" aria-label="${fmtMD(d)}に予定を追加">＋</button></header>
       ${evs.length ? `<div class="lbl">予定</div>${evs.map((e) => eventRow(e)).join('')}` : ''}
       ${ps.length ? `<div class="lbl">この日が期限の準備</div>${ps.map((p) => prepRow(p)).join('')}` : ''}
-      ${!evs.length && !ps.length ? '<p class="empty">予定なし</p>' : ''}
+      ${tds.length ? `<div class="lbl">やること（学校${tds.filter((x) => x.where === 'school').length}・家${tds.filter((x) => x.where === 'home').length}）</div>${tds.map((x) => todoRow(x, { badge: true, go: `#/todo?d=${d}` })).join('')}` : ''}
+      ${!evs.length && !ps.length && !tds.length ? '<p class="empty">予定なし</p>' : ''}
     </section>`;
   }
   h += '</div>';
@@ -237,6 +256,8 @@ function viewMonth(q) {
       ...evs.map((e) => `<span class="chip ${CAT_CLASS[e.category] || ''} ${KIND_CLASS[e.kind] || ''}">${esc(e.title || '（無題）')}</span>`),
       ...ps.map((p) => `<span class="chip prep ${p.done ? 'done' : ''}"><span class="ck">${p.done ? '☑' : '☐'}</span>${esc(p.title)}</span>`),
     ];
+    const tdn = todosOn(d).filter((x) => !x.done).length;
+    if (tdn) chips.push(`<span class="chip todo">やること${tdn}</span>`);
     const max = 3;
     const shown = chips.slice(0, max).join('') + (chips.length > max ? `<span class="chip more">ほか${chips.length - max}件</span>` : '');
     const w = dow(d);
@@ -244,7 +265,7 @@ function viewMonth(q) {
       <span class="dn">${Number(d.slice(8))}</span>${shown}</button>`;
   }
   h += `</div>
-  <div class="legend"><span><span class="chip c-kokugo" style="display:inline">行事・授業</span>（色は分類）</span><span><span class="chip k-shime" style="display:inline">締切</span></span><span><span class="chip prep" style="display:inline">☐準備の期限</span></span></div>`;
+  <div class="legend"><span><span class="chip c-kokugo" style="display:inline">行事・授業</span>（色は分類）</span><span><span class="chip k-shime" style="display:inline">締切</span></span><span><span class="chip prep" style="display:inline">☐準備の期限</span></span><span><span class="chip todo" style="display:inline">やること</span>（未完了の数）</span></div>`;
 
   const evs = eventsOn(sel);
   const ps = prepsDueOn(sel);
@@ -252,9 +273,81 @@ function viewMonth(q) {
       <button class="btn small" data-act="quick-add" data-date="${sel}">＋ この日に追加</button></div>
     ${evs.length ? `<div class="lbl">予定</div>${evs.map((e) => eventRow(e)).join('')}` : ''}
     ${ps.length ? `<div class="lbl">この日が期限の準備</div>${ps.map((p) => prepRow(p)).join('')}` : ''}
-    ${!evs.length && !ps.length ? '<p class="empty">この日の予定はありません。</p>' : ''}
-    <div class="btnrow"><button class="btn small" data-go="#/week?d=${sel}">この週を週表示で見る</button></div>
+    ${todosOn(sel).length ? `<div class="lbl">やること</div>${todosOn(sel).map((x) => todoRow(x, { badge: true, go: `#/todo?d=${sel}` })).join('')}` : ''}
+    ${!evs.length && !ps.length && !todosOn(sel).length ? '<p class="empty">この日の予定はありません。</p>' : ''}
+    <div class="btnrow"><button class="btn small" data-go="#/week?d=${sel}">この週を週表示で見る</button><button class="btn small" data-go="#/todo?d=${sel}">この日のやることを開く</button></div>
   </section>`;
+  return h;
+}
+
+/* ---------- やることメモ ---------- */
+let todoDay = null;
+const whereBadge = (w) => `<span class="badge w-${w}">${WHERE[w]}</span>`;
+function todoSub(x, o = {}) {
+  return [
+    o.showDate && x.date ? `${fmtMD(x.date)}の${WHERE[x.where]}${x.date < today() && !x.done ? `（${diffDays(today(), x.date)}日前から）` : ''}` : '',
+    x.carry ? `持ち越し${x.carry}回` : '',
+    x.moves ? `学校⇔家 ${x.moves}回` : '',
+    x.memo ? esc(x.memo.split('\n')[0]) : '',
+  ].filter(Boolean).join('・');
+}
+function todoRow(x, o = {}) {
+  const sub = todoSub(x, o);
+  const main = o.go ? `data-go="${o.go}"` : `data-act="todo-edit" data-id="${x.id}"`;
+  return `<div class="item todo w-${x.where} ${x.done ? 'done' : ''} ${o.lo ? 'lo' : ''} ${o.place ? 'haspl' : ''}">
+    <label class="chk"><input type="checkbox" data-act="toggle-todo" data-id="${x.id}" ${x.done ? 'checked' : ''} aria-label="「${esc(x.title)}」を済みにする"></label>
+    <button class="item-main" ${main}><span class="ttl">${o.badge ? whereBadge(x.where) : ''}${esc(x.title)}</span>${sub ? `<span class="sub">${sub}</span>` : ''}</button>
+    ${o.move && !x.done ? `<button class="movebtn" data-act="todo-move" data-id="${x.id}" aria-label="「${esc(x.title)}」を${WHERE[otherWhere(x.where)]}でやる仕事に移す">${WHERE[otherWhere(x.where)]}へ<br>移す</button>` : ''}
+    ${o.place ? `<div class="carrybtns">${['school', 'home'].map((w) => `<button class="btn small" data-act="todo-place" data-id="${x.id}" data-where="${w}" data-date="${o.place}">${WHERE_ICON[w]} ${o.place === today() ? '今日' : 'この日'}の${WHERE[w]}で</button>`).join('')}</div>` : ''}
+  </div>`;
+}
+function todoCol(d, w) {
+  const all = todosOn(d, w);
+  const undone = all.filter((x) => !x.done);
+  const done = all.filter((x) => x.done);
+  return `<section class="card todo-col w-${w}">
+    <h2>${WHERE_ICON[w]} ${WHERE[w]}でやる<span class="cnt">残り ${undone.length}</span></h2>
+    <div class="todo-add"><input id="ta-${w}" placeholder="${w === 'school' ? '例：学年だよりの原稿確認' : '例：ノートの点検、板書計画'}" enterkeyhint="done" aria-label="${WHERE[w]}でやることを入力">
+      <button class="btn primary" data-act="todo-add" data-where="${w}">追加</button></div>
+    ${undone.map((x) => todoRow(x, { move: true })).join('') || `<p class="empty">${WHERE[w]}でやることはありません。</p>`}
+    ${done.length ? `<details class="donelist"><summary>済み（${done.length}件）</summary>${done.map((x) => todoRow(x)).join('')}</details>` : ''}
+  </section>`;
+}
+function viewTodo(q) {
+  const t = today();
+  const d = q.get('d') || t;
+  todoDay = d;
+  const lo = d === t ? leftoverTodos() : [];
+  const sd = somedayTodos();
+  const dayAll = todosOn(d);
+  const rel = d === t ? '今日' : d === addDays(t, 1) ? '明日' : d === addDays(t, -1) ? '昨日' : '';
+  let h = `<div class="viewhead">
+    <button class="navbtn" data-go="#/todo?d=${addDays(d, -1)}" aria-label="前の日">◀</button>
+    <div class="vh-title"><div class="vh-main">${fmtFull(d)}のやること</div>
+      ${rel ? `<div class="vh-sub">${rel}</div>` : ''}${d !== t ? '<button class="linkbtn" data-go="#/todo">今日へ戻る</button>' : ''}</div>
+    <button class="navbtn" data-go="#/todo?d=${addDays(d, 1)}" aria-label="次の日">▶</button>
+  </div>
+  <div class="summary">
+    <div>🏫 学校 残り <b>${dayAll.filter((x) => x.where === 'school' && !x.done).length}</b></div>
+    <div>🏠 家 残り <b>${dayAll.filter((x) => x.where === 'home' && !x.done).length}</b></div>
+    <div>済み <b>${dayAll.filter((x) => x.done).length}</b></div>
+    ${lo.length ? `<div class="warnnum">やり残し <b>${lo.length}</b></div>` : ''}
+  </div>`;
+  const evs = eventsOn(d); const ps = prepsDueOn(d).filter((p) => !p.done);
+  if (evs.length || ps.length) {
+    h += `<section class="card"><div class="lbl" style="margin-top:0">この日の予定・準備（見通し）</div>
+      ${evs.map((e) => eventRow(e)).join('')}${ps.map((p) => prepRow(p)).join('')}</section>`;
+  }
+  if (lo.length) {
+    h += `<section class="card box warn"><h2>やり残し（${lo.length}件）</h2>
+      <p class="hint">前の日までに終わらなかった仕事です。今日、学校と家のどちらでやるかを選んでください。</p>
+      <div class="btnrow" style="margin:0 0 6px"><button class="btn small" data-act="todo-carry-all">すべて今日に持ち越す（場所はそのまま）</button></div>
+      ${lo.map((x) => todoRow(x, { showDate: true, place: t, lo: true })).join('')}</section>`;
+  }
+  h += `<div class="todo-cols">${todoCol(d, 'school')}${todoCol(d, 'home')}</div>`;
+  h += `<section class="card"><h2>日付を決めていない仕事（いつかやる）${sd.length ? `（${sd.length}件）` : ''}</h2>
+    <p class="hint">右下の「＋ 追加」で日付を空けて登録すると、ここに入ります。やる日が決まったら、この日の学校・家に入れられます。</p>
+    ${sd.map((x) => todoRow(x, { badge: true, place: d })).join('') || '<p class="empty">ありません。</p>'}</section>`;
   return h;
 }
 
@@ -531,7 +624,7 @@ function viewSettings() {
   return `<div class="viewhead simple"><div class="vh-title"><h1>設定・データ</h1></div></div>
     <section class="card"><h2>保存先と同期</h2><div id="storage-info">確認中…</div></section>
     <section class="card"><h2>バックアップと復元</h2>
-      <p class="hint">予定・準備・メモ・添付資料（PDF・写真の本体を含む）を1つのファイルに保存します。機種変更や、別の端末にデータを移すときにも使います。</p>
+      <p class="hint">予定・準備・やること・メモ・添付資料（PDF・写真の本体を含む）を1つのファイルに保存します。機種変更や、別の端末にデータを移すときにも使います。</p>
       <div class="btnrow"><button class="btn primary" data-act="backup">バックアップを保存</button>
         <label class="btn filebtn">バックアップから復元<input type="file" accept=".json,application/json" data-act="restore"></label></div>
       <p class="${lb && diffDays(today(), lb.slice(0, 10)) <= 30 ? 'muted' : 'ng'}" style="margin-bottom:0">最終バックアップ：${lb ? new Date(lb).toLocaleString('ja-JP') : 'まだありません'}</p>
@@ -540,7 +633,7 @@ function viewSettings() {
       <p class="hint">月間行事予定の文字を貼り付けて、日付・行事名・場所の候補を一括登録します。</p>
       <button class="btn" data-go="#/bulk">月間行事予定から一括登録（試験版）</button></section>
     <section class="card"><h2>確認用サンプル</h2>
-      <p class="hint">「11月26日 人権・同和教育参観日」と準備2件、前年度の行事などを追加します。</p>
+      <p class="hint">「11月26日 人権・同和教育参観日」と準備2件、前年度の行事、昨日〜明日のやること（やり残しを含む）などを追加します。</p>
       <button class="btn" data-act="load-sample">確認用サンプルを読み込む</button></section>
     <section class="card"><h2>すべてのデータを削除</h2>
       <p class="hint">この端末に保存したすべての予定・資料を消します。先にバックアップを保存してください。</p>
@@ -562,7 +655,7 @@ async function fillStorageInfo() {
       <dt>端末間の同期</dt><dd><span class="ng">同期なし</span>　スマホ・iPad・パソコンのデータはそれぞれ別です。別の端末へ移すときは「バックアップを保存」→ 移す先で「バックアップから復元」をしてください。</dd>
       <dt>消えにくくする設定</dt><dd>${persisted === true ? '<span class="ok">許可済み</span>（ブラウザが自動で消さない設定）' : persisted === false ? '<span class="ng">未許可</span> <button class="btn small" data-act="persist">許可を求める</button>' : 'このブラウザでは確認できません'}</dd>
       <dt>使用量</dt><dd>${est ? `${mb(est.usage || 0)}（上限の目安 ${mb(est.quota || 0)}）` : '確認できません'}</dd>
-      <dt>登録件数</dt><dd>予定 ${S.events.size}・準備 ${S.preps.size}・資料 ${S.attachments.size}・資料メモ ${S.notes.size}</dd>
+      <dt>登録件数</dt><dd>予定 ${S.events.size}・準備 ${S.preps.size}・やること ${S.todos.size}・資料 ${S.attachments.size}・資料メモ ${S.notes.size}</dd>
       <dt>アプリとして起動</dt><dd>${standalone ? '<span class="ok">ホーム画面から起動中</span>' : 'ブラウザで表示中'}</dd>
     </dl>
     ${ios ? `<div class="note-box"><b>iPhone・iPadの注意：</b>Safariで開いたときと、ホーム画面のアイコンから開いたときでは、データが別々に保存されます。<b>いつも同じ方法（おすすめはホーム画面のアイコン）</b>で開いてください。${standalone ? '' : '<br>Safariで7日以上開かないと、サイトのデータが消されることがあります。'}</div>` : ''}
@@ -583,19 +676,23 @@ function render() {
   switch (view) {
     case 'month': html = viewMonth(q); break;
     case 'undated': html = viewUndated(); break;
+    case 'todo': html = viewTodo(q); break;
     case 'event': currentEventId = parts[1]; html = viewEvent(parts[1]); break;
     case 'copy': html = parts[1] ? viewCopyForm(parts[1]) : viewCopyList(q); break;
     case 'settings': html = viewSettings(); break;
     case 'bulk': html = viewBulk(); break;
     default: html = viewWeek(q);
   }
+  if (view !== 'todo') todoDay = null;
   if (view !== 'event' && !(view === 'copy' && parts[1])) lastListHash = location.hash || '#/week';
   if (!(view === 'copy' && parts[1])) CF = null;
   $('#view').innerHTML = html;
-  const tab = view === 'bulk' ? 'settings' : view === 'event' ? null : (['week', 'month', 'undated', 'copy', 'settings'].includes(view) ? view : 'week');
+  const tab = view === 'bulk' ? 'settings' : view === 'event' ? null : (['week', 'month', 'todo', 'undated', 'copy', 'settings'].includes(view) ? view : 'week');
   $$('.tabbar a').forEach((a) => a.classList.toggle('on', a.dataset.tab === tab));
   const n = evList().filter((e) => !e.date).length;
   const badge = $('#undated-badge'); badge.hidden = !n; badge.textContent = n;
+  const ln = leftoverTodos().length;
+  const tb = $('#todo-badge'); tb.hidden = !ln; tb.textContent = ln;
   const key = view + (parts[1] || '');
   if (key !== currentView) { window.scrollTo(0, 0); currentView = key; }
   if (view === 'settings') fillStorageInfo();
@@ -659,6 +756,85 @@ async function quickSave(detail) {
   closeSheet(false);
   toast(ev.date ? `${fmtMD(ev.date)}に登録しました` : '日付未定で登録しました');
   if (detail) location.hash = `#/event/${ev.id}`; else rerender();
+}
+
+/* ---------- やることの操作 ---------- */
+// 入力途中の文字を残したまま描き直す
+function refreshTodo(focusId) {
+  const keep = {};
+  for (const w of ['school', 'home']) { const el = $(`#ta-${w}`); if (el) keep[w] = el.value; }
+  const active = document.activeElement?.id;
+  rerender();
+  for (const w of Object.keys(keep)) { const el = $(`#ta-${w}`); if (el) el.value = keep[w]; }
+  const f = focusId || (active && active.startsWith('ta-') ? active : null);
+  if (f && $(`#${f}`)) $(`#${f}`).focus({ preventScroll: true });
+}
+async function addTodo(where, silent) {
+  const el = $(`#ta-${where}`);
+  if (!el) return;
+  const title = el.value.trim();
+  if (!title) { if (!silent) { toast('やることを入力してください'); el.focus(); } return; }
+  el.value = '';
+  await save('todos', newTodo({ title, where, date: todoDay || today() }));
+  if (silent) { toast(`入力途中の「${title}」も保存しました`); return; }
+  toast(`${WHERE[where]}でやることに追加しました`);
+  refreshTodo(`ta-${where}`);
+}
+async function flushTodoInputs() {
+  for (const w of ['school', 'home']) { const el = $(`#ta-${w}`); if (el && el.value.trim()) await addTodo(w, true); }
+}
+let tqWhere = 'school';
+function openTodoAdd(date) {
+  tqWhere = 'school';
+  openSheet(`<h2>やることを追加</h2>
+    <label for="tq-title">内容</label>
+    <input id="tq-title" autofocus placeholder="例：学年会の資料に目を通す" enterkeyhint="done">
+    <label>どこでやる</label>
+    <div class="seg" id="tq-where">${['school', 'home'].map((w) => `<button class="${w === tqWhere ? 'on' : ''}" data-act="tq-where" data-val="${w}">${WHERE_ICON[w]} ${WHERE[w]}</button>`).join('')}</div>
+    <label for="tq-date">いつやる（空けておくと「いつかやる」に入ります）</label>
+    <input id="tq-date" type="date" value="${date || ''}">
+    <div class="sheet-actions">
+      <button class="btn primary big" data-act="tq-save">追加する</button>
+      <button class="btn ghost" data-act="close-sheet">やめる</button>
+    </div>`);
+}
+async function saveTodoAdd() {
+  const title = $('#tq-title').value.trim();
+  if (!title) { toast('内容を入力してください'); $('#tq-title').focus(); return; }
+  const date = $('#tq-date').value || null;
+  await save('todos', newTodo({ title, where: tqWhere, date }));
+  closeSheet(false);
+  toast(date ? `${fmtMD(date)}の${WHERE[tqWhere]}に追加しました` : '「いつかやる」に追加しました');
+  refreshTodo();
+}
+let editTodoId = null;
+function openTodoEdit(id) {
+  const x = S.todos.get(id);
+  if (!x) return;
+  editTodoId = id;
+  const rec = [`${fmtMD(toStr(new Date(x.createdAt)))}に作成`, `持ち越し${x.carry || 0}回`, `学校⇔家の移動${x.moves || 0}回`, x.done && x.doneAt ? `${fmtMD(toStr(new Date(x.doneAt)))}に済み` : ''].filter(Boolean).join('・');
+  openSheet(`<h2>やることの編集</h2>
+    <label for="te-title">内容</label>
+    <input id="te-title" data-todo-field="title" value="${esc(x.title)}">
+    <label>どこでやる</label>
+    <div class="seg" id="te-where">${['school', 'home'].map((w) => `<button class="${w === x.where ? 'on' : ''}" data-act="te-where" data-val="${w}">${WHERE_ICON[w]} ${WHERE[w]}</button>`).join('')}</div>
+    <label for="te-date">いつやる</label>
+    <div class="row"><input id="te-date" type="date" data-todo-field="date" value="${x.date || ''}">
+      <button class="btn small" data-act="te-date" data-val="${today()}">今日</button>
+      <button class="btn small" data-act="te-date" data-val="${addDays(today(), 1)}">明日</button>
+      <button class="btn small" data-act="te-date" data-val="">いつか</button></div>
+    <label for="te-memo">メモ</label>
+    <textarea id="te-memo" data-todo-field="memo" rows="3" placeholder="どこまで進んだか、必要なものなど">${esc(x.memo)}</textarea>
+    <p class="muted" style="font-size:.88rem">記録：${rec}</p>
+    <div class="sheet-actions">
+      <button class="btn primary big" data-act="close-sheet">閉じる（入力は自動で保存されます）</button>
+      <button class="btn danger" data-act="todo-del">このやることを削除</button>
+    </div>`, () => { editTodoId = null; refreshTodo(); });
+}
+// やる日を変える（過ぎた日から今日以降へ動かすと「持ち越し」に数える）
+function setTodoDate(x, date) {
+  if (!x.done && x.date && x.date < today() && date && date >= today()) x.carry = (x.carry || 0) + 1;
+  x.date = date || null;
 }
 
 /* ---------- 予定の編集 ---------- */
@@ -984,7 +1160,7 @@ async function exportBackup() {
   const blobs = await DB.all('blobs');
   const data = {
     app: 'sensei-note', format: 1, version: APP_VERSION, exportedAt: new Date().toISOString(),
-    events: evList(), preps: prepList(), attachments: [...S.attachments.values()], notes: [...S.notes.values()],
+    events: evList(), preps: prepList(), attachments: [...S.attachments.values()], notes: [...S.notes.values()], todos: todoList(),
     meta: [...S.meta.values()].filter((m) => m.id !== 'lastBackup'),
     blobs: blobs.map((b) => ({ id: b.id, mime: b.mime, data: abToB64(b.data) })),
   };
@@ -1000,13 +1176,14 @@ async function restoreBackup(input) {
   try { data = JSON.parse(await file.text()); } catch { alert('ファイルを読み込めませんでした。'); return; }
   if (data.app !== 'sensei-note' || !Array.isArray(data.events)) { alert('「先生の予定ノート」のバックアップファイルではありません。'); return; }
   const when = data.exportedAt ? new Date(data.exportedAt).toLocaleString('ja-JP') : '日時不明';
-  if (!confirm(`${when} のバックアップ（予定${data.events.length}件・資料${(data.attachments || []).length}件）で、今のデータをすべて置き換えます。よろしいですか？`)) return;
+  if (!confirm(`${when} のバックアップ（予定${data.events.length}件・やること${(data.todos || []).length}件・資料${(data.attachments || []).length}件）で、今のデータをすべて置き換えます。よろしいですか？`)) return;
   try {
     for (const s of STORES) await DB.clear(s);
     await DB.putMany('events', data.events);
     await DB.putMany('preps', data.preps || []);
     await DB.putMany('attachments', data.attachments || []);
     await DB.putMany('notes', data.notes || []);
+    await DB.putMany('todos', data.todos || []);
     await DB.putMany('meta', data.meta || []);
     for (const b of data.blobs || []) await DB.put('blobs', { id: b.id, mime: b.mime, data: b64ToAb(b.data) });
     await loadAll();
@@ -1036,6 +1213,16 @@ async function loadSample() {
     newPrep({ eventId: kenkyu.id, title: 'ワークシート印刷', due: '2026-12-01', offset: 2 }),
   ];
   for (const p of preps) await save('preps', p);
+  const t0 = today();
+  const todos = [
+    newTodo({ title: '学年会の資料に目を通す', where: 'school', date: addDays(t0, -1) }),
+    newTodo({ title: '期末テストの採点（1組）', where: 'school', date: t0 }),
+    newTodo({ title: '道徳の振り返りカードを読む', where: 'school', date: t0, done: true, doneAt: Date.now() }),
+    newTodo({ title: '国語 来週の板書計画', where: 'home', date: t0, memo: '「走れメロス」2〜3時間目' }),
+    newTodo({ title: '保護者会のお便りを印刷', where: 'school', date: addDays(t0, 1) }),
+    newTodo({ title: '読書感想文の評価基準をつくる', where: 'home', date: null }),
+  ];
+  for (const x of todos) await save('todos', x);
   await setMeta('sampleLoaded', true);
   toast('サンプルを読み込みました');
   location.hash = '#/week'; rerender();
@@ -1043,7 +1230,48 @@ async function loadSample() {
 
 /* ---------- 操作の受け付け ---------- */
 const ACT = {
-  'quick-add': (el) => openQuickAdd(el.dataset.date || (location.hash.startsWith('#/month') ? new URLSearchParams(location.hash.split('?')[1] || '').get('d') : '')),
+  'quick-add': (el) => (location.hash.startsWith('#/todo') && !el.dataset.date ? openTodoAdd(todoDay || today()) : openQuickAdd(el.dataset.date || (location.hash.startsWith('#/month') ? new URLSearchParams(location.hash.split('?')[1] || '').get('d') : ''))),
+  'todo-add': (el) => addTodo(el.dataset.where, false),
+  'todo-edit': (el) => openTodoEdit(el.dataset.id),
+  'todo-move': async (el) => {
+    const x = S.todos.get(el.dataset.id);
+    x.where = otherWhere(x.where); x.moves = (x.moves || 0) + 1;
+    await save('todos', x);
+    toast(`「${x.title}」を${WHERE[x.where]}でやる仕事に移しました`);
+    refreshTodo();
+  },
+  'todo-place': async (el) => {
+    const x = S.todos.get(el.dataset.id);
+    const w = el.dataset.where;
+    if (x.where !== w && x.date) x.moves = (x.moves || 0) + 1;
+    x.where = w; setTodoDate(x, el.dataset.date);
+    await save('todos', x);
+    toast(`「${x.title}」を${fmtMD(x.date)}の${WHERE[w]}に入れました`);
+    refreshTodo();
+  },
+  'todo-carry-all': async () => {
+    const lo = leftoverTodos();
+    for (const x of lo) { setTodoDate(x, today()); await save('todos', x); }
+    toast(`${lo.length}件を今日に持ち越しました`);
+    refreshTodo();
+  },
+  'tq-where': (el) => { tqWhere = el.dataset.val; $$('#tq-where button').forEach((b) => b.classList.toggle('on', b === el)); },
+  'tq-save': saveTodoAdd,
+  'te-where': async (el) => {
+    const x = S.todos.get(editTodoId); if (!x) return;
+    if (x.where !== el.dataset.val) { x.where = el.dataset.val; x.moves = (x.moves || 0) + 1; await save('todos', x); toast(`${WHERE[x.where]}でやる仕事にしました`); }
+    $$('#te-where button').forEach((b) => b.classList.toggle('on', b === el));
+  },
+  'te-date': async (el) => {
+    const x = S.todos.get(editTodoId); if (!x) return;
+    setTodoDate(x, el.dataset.val); $('#te-date').value = x.date || '';
+    await save('todos', x); toast(x.date ? `${fmtMD(x.date)}にやることにしました` : '「いつかやる」にしました');
+  },
+  'todo-del': async () => {
+    const x = S.todos.get(editTodoId); if (!x) return;
+    if (!confirm(`「${x.title}」を削除しますか？`)) return;
+    await removeRec('todos', x.id); closeSheet(true); toast('削除しました');
+  },
   'qa-cat': (el) => { qaCat = qaCat === el.dataset.val ? '' : el.dataset.val; $$('#qa-cats button').forEach((b) => b.classList.toggle('on', b.dataset.val === qaCat)); },
   'qa-save': (el) => quickSave(!!el.dataset.detail),
   'close-sheet': () => { if (confirmDiscard()) closeSheet(true); },
@@ -1136,6 +1364,13 @@ const ACT_CHANGE = {
     toast(p.done ? `「${p.title}」を完了にしました` : '未完了に戻しました');
     if (currentEventId) refreshPrepSection(); else rerender();
   },
+  'toggle-todo': async (el) => {
+    const x = S.todos.get(el.dataset.id);
+    x.done = el.checked; x.doneAt = x.done ? Date.now() : null;
+    await save('todos', x);
+    toast(x.done ? `「${x.title}」済み！` : '未完了に戻しました');
+    refreshTodo();
+  },
   'set-date': async (el) => {
     const ev = S.events.get(el.dataset.id);
     if (!el.value) return;
@@ -1163,6 +1398,13 @@ document.addEventListener('click', (e) => {
 document.addEventListener('change', (e) => {
   const el = e.target;
   if (el.dataset.act && ACT_CHANGE[el.dataset.act]) { Promise.resolve(ACT_CHANGE[el.dataset.act](el)).catch((err) => { console.error(err); toast('エラーが起きました'); }); return; }
+  if (el.dataset.todoField === 'date') {
+    const x = S.todos.get(editTodoId); if (!x) return;
+    setTodoDate(x, el.value || null);
+    save('todos', x).then(() => toast(x.date ? `${fmtMD(x.date)}にやることにしました` : '「いつかやる」にしました'));
+    return;
+  }
+  if (el.dataset.todoField) return;
   if (el.dataset.field) { const t = fieldTimers.get(el.dataset.field); if (t) clearTimeout(t.timer); fieldTimers.delete(el.dataset.field); onFieldChange(el); return; }
   if (el.dataset.prepField) {
     const p = S.preps.get(el.dataset.id); const ev = S.events.get(p.eventId);
@@ -1212,6 +1454,11 @@ document.addEventListener('input', (e) => {
   const el = e.target;
   if (el.dataset.field && el.dataset.field !== 'date' && el.type !== 'time') scheduleFieldSave(el);
   if (el.dataset.cf === 'title' && CF) CF.title = el.value;
+  if ((el.dataset.todoField === 'title' || el.dataset.todoField === 'memo') && editTodoId) {
+    const x = S.todos.get(editTodoId);
+    const v = el.dataset.todoField === 'title' ? el.value.trim() : el.value;
+    if (x && (v || el.dataset.todoField === 'memo')) { x[el.dataset.todoField] = v; save('todos', x); }
+  }
   if (el.id === 'copy-kw') {
     copyKw = el.value;
     const sel = $('[data-act="copy-fy"]').value;
@@ -1223,25 +1470,29 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.isComposing) {
     if (e.target.id === 'qa-title') { e.preventDefault(); quickSave(false); }
     if (e.target.id === 'np-title' || e.target.id === 'np-off') { e.preventDefault(); addPrep(false); }
+    if (e.target.id === 'ta-school' || e.target.id === 'ta-home') { e.preventDefault(); addTodo(e.target.id.slice(3), false); }
+    if (e.target.id === 'tq-title') { e.preventDefault(); saveTodoAdd(); }
+    if (e.target.id === 'te-title') { e.preventDefault(); e.target.blur(); }
   }
   if (e.key === 'Escape') { if (!$('#sheet').hidden) closeSheet(true); else if (V) closeViewer(); }
 });
 function confirmDiscard() {
-  const t = $('#qa-title') || $('#lk-url');
+  const t = $('#qa-title') || $('#lk-url') || $('#tq-title');
   return !(t && t.value.trim()) || confirm('入力中の内容はまだ登録されていません。閉じてもよいですか？\n（登録するときは「登録する」を押してください）');
 }
 $('#sheet-backdrop').addEventListener('click', () => { if (confirmDiscard()) closeSheet(true); });
 window.addEventListener('hashchange', async () => {
   // 画面を描き替える前に、前の画面で入力途中だったものを保存（currentEventId は前の画面のまま）
   if (currentEventId) await flushPending();
+  await flushTodoInputs();
   if (V) closeViewer();
   render();
 });
 // 画面を離れる前に、入力途中の文字を保存
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'hidden') flushPending();
+  if (document.visibilityState === 'hidden') { flushPending(); flushTodoInputs(); }
 });
-window.addEventListener('pagehide', () => { flushPending(); });
+window.addEventListener('pagehide', () => { flushPending(); flushTodoInputs(); });
 let lastDay = today();
 setInterval(() => { if (today() !== lastDay) { lastDay = today(); if (!currentEventId && !V && $('#sheet').hidden) rerender(); } }, 60000);
 
@@ -1259,7 +1510,7 @@ setInterval(() => { if (today() !== lastDay) { lastDay = today(); if (!currentEv
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
     navigator.serviceWorker.register('sw.js').catch((e) => console.warn('SW', e));
   }
-  if (navigator.storage?.persisted && S.events.size > 0) {
+  if (navigator.storage?.persisted && (S.events.size > 0 || S.todos.size > 0)) {
     try { if (!(await navigator.storage.persisted())) await navigator.storage.persist(); } catch { /* 無視 */ }
   }
 })();

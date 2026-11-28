@@ -1,5 +1,5 @@
 /* オフラインでも開けるようにするための Service Worker */
-const CACHE = 'sensei-note-v1.0.2';
+const CACHE = 'sensei-note-v1.1.0';
 const SHELL = ['./', './index.html', './style.css', './app.js', './manifest.webmanifest', './icon.svg', './icon-180.png', './icon-512.png', './pdf.min.js', './pdf.worker.min.js'];
 
 self.addEventListener('install', (e) => {
